@@ -194,13 +194,16 @@ class Network():
         # Only register optimizer to our "new" classifier layers
         self.optimizer = optim.Adam(self.model._modules[self.classifier_key].parameters(), lr=learning_rate)
         
-        try:
+        # default fallback to either pick up a loaded state 
+        # or try to load existing checkpoint
+        if hasattr(self, 'model_state'):
+            print("Loading prefetched model state...")
             self.model.load_state_dict(self.model_state)
-        except:
-            None
+        else:
+            self.load()
 
         
-    def train(self, epochs=4, logg_every=40):
+    def train(self, epochs=4, logg_every=1):
         
         steps = 0
         # save checkpoint
@@ -229,7 +232,9 @@ class Network():
                 if steps % logg_every == 0:
                     print("Epoch: {} of {}, images {} of {}...".format(self.epochs+1, epochs+init_epochs, proc_images, total_images),
                           "Loss: {:.4f}".format(running_loss/logg_every))
-                    running_loss = 0                    
+                    running_loss = 0  
+                steps+=1
+                
             self.epochs += 1
             self.save()
             self.validate()
@@ -289,10 +294,15 @@ class Network():
     def load(self, save_dir='checkpoints', checkpoint=None):
         
         filename = checkpoint if checkpoint != None else save_dir+'/'+self.arch+'.checkpoint'
+        if not os.path.exists(filename):
+            print("Could'nt find any {filename}.","Will be created after first training epoch.")
+            return
+        
         print(f'Loading {filename}')
         c = torch.load(filename)
         try:
             self.model.load_state_dict(c['model_state'])
+            self.optimizer.load_state_dict(c['optimizer_state']
         except:
             self.model_state = c['model_state']
         #self.model._modules[self.classifier_key].load_state_dict(c['classifier_state'])
