@@ -154,48 +154,10 @@ class Network():
         elif checkpoint != None:
             load_pretrained = False # asume no training
 
-        self.load(checkpoint=checkpoint) if checkpoint != None else None
-        self.model = getattr(models, self.arch)(pretrained=load_pretrained)
-                
-        # remove the last layer and check if its a 'classifier' or 'fc' (feature map)
-        # This dependes on architecture
+        self.load(checkpoint=checkpoint, pretrained=load_pretrained)
+        #self.load(checkpoint=checkpoint) if checkpoint != None else None
+        #self.model = getattr(models, self.arch)(pretrained=load_pretrained)
         
-        prev_last_layer = self.model._modules.popitem()
-        self.classifier_key = prev_last_layer[0]
-        
-        # disable gradient descent backprop for pretrained layers
-        # as we have poped the last layer we can update all of the model left
-        
-        for p in self.model.parameters():
-            p.requires_grad = False
-                
-        our_in_features = 0
-        our_out_features = len(self.class_to_idx)
-        
-        if self.classifier_key == 'fc':
-            our_in_features = prev_last_layer[1].in_features
-            
-        elif self.classifier_key == 'classifier':
-            # if we want to keep original classifier arch just 
-            # update out_features of last linear func and reattach..
-            # prev_last_layer[1][-1].out_features = 102
-            # self.model._modules.update([prev_last_layer])
-            # for this project e will use our own though..
-
-            our_in_features = prev_last_layer[1][0].in_features
-            
-        else:
-            print(f"Error: does not recognize last layer of architechture 'self.arch'!", prev_last_layer)
-        
-        # Attach and replace last layer with our own classifier
-        self.model._modules.update([(self.classifier_key, nn.Sequential(OrderedDict([
-            ('fc1', nn.Linear( our_in_features, hidden_units )),
-            ('relu', nn.ReLU()),
-            ('fc2', nn.Linear( hidden_units, len(self.class_to_idx) )),
-            ('output', nn.LogSoftmax(dim=1))    
-        ])))])
-        
- 
         if gpu:
             if not torch.cuda.is_available():
                 print(f"Error: sorry, no gpu seem available, will use {self.device}!")
@@ -203,28 +165,17 @@ class Network():
                 self.device = 'cuda'
                 #torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-        # define error loss function and optimizer
-        self.criterion = nn.NLLLoss()
-        # Only register optimizer to our "new" classifier layers
-        self.optimizer = optim.Adam(self.model._modules[self.classifier_key].parameters(), lr=learning_rate)
-        
-        # default fallback to either pick up a loaded state 
-        # or try to load existing checkpoint
-        if hasattr(self, 'model_state'):
-            print("Loading prefetched model state...")
-            self.model.load_state_dict(self.model_state)
-        
-        else:
-            self.load()
+
 
 
         
     def train(self, epochs=4, logg_every=1):
         
         steps = 0
-        # save checkpoint
-        self.model.to(self.device)
         self.model.train()
+        self.model.to(self.device)
+        self.criterion.to(self.device)
+
         dataloader = self.images.dataloaders['training']
         total_images = len(dataloader) * dataloader.batch_size
         init_epochs = self.epochs
@@ -233,7 +184,8 @@ class Network():
             running_loss = 0
             proc_images = 0
             for images, labels in dataloader:
-                images, labels = images.to(self.device), labels.to(self.device)
+                if self.device == 'cuda':
+                    images, labels = images.cuda(), labels.cuda(async=True)
                 proc_images += len(images)
                 
                 self.optimizer.zero_grad()
@@ -301,11 +253,9 @@ class Network():
             save_dir = self.save_dir
          
         filename = save_dir+'/'+self.arch+'.checkpoint'
-        if not os.path.exists(filename):
-            print(f"Could'nt find any {filename}.","Will be created after first training epoch.")
-            if not os.path.exists(save_dir):
-                  os.makedirs(save_dir)
-            return
+
+        if not os.path.exists(save_dir):
+            os.makedirs(save_dir)
             
         checkpoint = {
             'epochs': self.epochs,
@@ -319,7 +269,7 @@ class Network():
         torch.save(checkpoint, filename)
         print(f'Saved checkpoint to {filename}')
         
-    def load(self, save_dir='checkpoints', checkpoint=None):
+    def load(self, save_dir='checkpoints', checkpoint=None, pretrained=False):
         
         # objects save_dir will override parameter..
         if hasattr(self, 'save_dir'):
@@ -330,24 +280,77 @@ class Network():
             print(f"Could'nt find any {filename}.","Will be created after first training epoch.")
             if not os.path.exists(save_dir):
                   os.makedirs(save_dir)
-            return
+            
+        if os.path.exists(filename):
+            print(f'Loading {filename}')
+            c = torch.load(filename)
+            self.arch = c['arch']
+            self.class_to_idx = c['class_to_idx']
+            self.epochs = c['epochs']
+            
+        self.model = getattr(models, self.arch)(pretrained=True)
+        # remove the last layer and check if its a 'classifier' or 'fc' (feature map)
+        # This dependes on architecture
+        self.prev_last_layer = self.model._modules.popitem()
+        self.classifier_key = self.prev_last_layer[0]
+ 
+        for p in self.model.parameters():
+            p.requires_grad = False
         
+        self.hijack_classifier()
         
-        print(f'Loading {filename}')
-        c = torch.load(filename)
         try:
             self.model.load_state_dict(c['model_state'])
-            #self.optimizer.load_state_dict(c['optimizer_state']
-        except:
-            self.model_state = c['model_state']
-        #self.model._modules[self.classifier_key].load_state_dict(c['classifier_state'])
-        self.class_to_idx = c['class_to_idx']
-        self.epochs = c['epochs']
-        try:
-            self.arch = c['arch']
         except:
             None
-            
+        
+        # Might need to move model before loading the optimizer
+        self.model.to(self.device)
+        
+        # define error loss function
+        self.criterion = nn.NLLLoss().to(self.device)
+        # Only register optimizer to our "new" classifier layers
+        self.optimizer = optim.Adam(self.model._modules[self.classifier_key].parameters(), lr=self.learning_rate)
+        # Having problem loading optimizer state
+        # Might have to to with whether model is on cuda or cpu
+        # Loading the below genereates:
+        # RuntimeError: Expected object of type torch.FloatTensor but found type torch.cuda.FloatTensor for argument #4 'other'
+        # self.optimizer.load_state_dict(c['optimizer_state'])
+
+        
+                                       
+    def hijack_classifier(self, in_features=0):
+                            
+        our_in_features = in_features
+        our_out_features = len(self.class_to_idx)
+        # disable gradient descent backprop for pretrained layers
+        # as we have poped the last layer we can update all of the model left
+        
+        # scan for first in_features, so we know what to expect
+        try:
+            our_in_features = self.prev_last_layer[1].in_features   
+        except:
+            for i in self.prev_last_layer[1]:
+                try:
+                    our_in_features = i.in_features
+                    break
+                except:
+                    next   
+
+        if our_in_features == 0:
+            print(f"Error: does not recognize last layers of architechture '{self.arch}'!\n\n", self.prev_last_layer)
+            exit(-1)
+        
+        # Attach and replace last layer with our own classifier
+        self.model._modules.update([(self.classifier_key, nn.Sequential(OrderedDict([
+            ('fc1', nn.Linear( our_in_features, self.hidden_units )),
+            ('relu', nn.ReLU()),
+            ('fc2', nn.Linear( self.hidden_units, len(self.class_to_idx) )),
+            ('output', nn.LogSoftmax(dim=1))    
+        ])))])
+        
+        
+                                       
     def predict(self, image, topk=5):
         
         self.model.eval()
