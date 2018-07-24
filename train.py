@@ -253,7 +253,7 @@ class Network():
                 
             self.epochs += 1
             self.save()
-            self.validate()
+            self.validate(set='test')
             
     def validate(self, set='validation', data_dir=None):
         
