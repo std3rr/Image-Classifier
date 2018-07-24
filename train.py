@@ -121,7 +121,9 @@ def process_image(image):
     
     margin = ( size - ccrop ) / 2
 
-    image = image.resize((size,size))
+    # thumbnail actualy keeps aspect ratio 
+    # and scales to size inplace
+    image.thumbnail((size,size))
     image = image.crop( (margin, margin, size-margin, size-margin) )
 
     image = np.array(image) / 255
