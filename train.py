@@ -134,7 +134,7 @@ def process_image(image):
 
 
 class Network():
-    def __init__(self, dataloaders=None, arch='resnet101', hidden_units=512, learning_rate=0.001, save_dir='', epochs=4, gpu=False, checkpoint=None):
+    def __init__(self, dataloaders=None, arch='resnet101', hidden_units=512, learning_rate=0.001, save_dir='checkpoints', epochs=4, gpu=False, checkpoint=None):
 
         self.device = 'cpu'
         self.arch = arch
@@ -153,7 +153,7 @@ class Network():
             load_pretrained = False # asume no training
 
         self.load(checkpoint=checkpoint) if checkpoint != None else None
-        self.model = getattr(models, arch)(pretrained=load_pretrained)
+        self.model = getattr(models, self.arch)(pretrained=load_pretrained)
                 
         # remove the last layer and check if its a 'classifier' or 'fc' (feature map)
         # This dependes on architecture
@@ -211,8 +211,10 @@ class Network():
         if hasattr(self, 'model_state'):
             print("Loading prefetched model state...")
             self.model.load_state_dict(self.model_state)
+        
         else:
             self.load()
+
 
         
     def train(self, epochs=4, logg_every=1):
