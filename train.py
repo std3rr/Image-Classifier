@@ -14,7 +14,16 @@ from PIL import Image
 def main():
     
     in_args = get_args()
-    netw = Network(dataloaders=create_dataloaders(in_args.data_dir), arch=in_args.arch, gpu=in_args.gpu, checkpoint=in_args.checkpoint)
+    netw = Network(
+        dataloaders=create_dataloaders(in_args.data_dir), 
+        arch=in_args.arch, 
+        gpu=in_args.gpu, 
+        checkpoint=in_args.checkpoint,
+        save_dir=in_args.save_dir,
+        epochs=in_args.epochs,
+        learning_rate=in_args.learning_rate,
+        hidden_units=in_args.hidden_units
+    )
     netw.train(epochs=in_args.epochs)
 
 def get_args():
@@ -33,11 +42,13 @@ def get_args():
     
     parsed_args = parser.parse_args()
     if parsed_args.arch == 'list':
+        archlist = [key for key,val in models.__dict__.items() if str(val).startswith("<function ")]
         print("Available base architechtures:")
         print("------------------------------")
         for name in archlist:
             print(f'  {name}')
-    
+        exit()
+        
     return parsed_args
 
 
@@ -129,6 +140,7 @@ class Network():
         self.arch = arch
         self.learning_rate = learning_rate
         self.hidden_units = hidden_units
+        self.save_dir = save_dir
         
         self.epochs = 0 # this is the epochs processed counter
         load_pretrained = True
@@ -279,6 +291,18 @@ class Network():
         
                     
     def save(self, save_dir='checkpoints'):
+
+        # objects save_dir will override parameter..
+        if hasattr(self, 'save_dir'):
+            save_dir = self.save_dir
+         
+        filename = save_dir+'/'+self.arch+'.checkpoint'
+        if not os.path.exists(filename):
+            print(f"Could'nt find any {filename}.","Will be created after first training epoch.")
+            if not os.path.exists(save_dir):
+                  os.makedirs(save_dir)
+            return
+            
         checkpoint = {
             'epochs': self.epochs,
             'arch': self.arch,
@@ -287,22 +311,29 @@ class Network():
             'optimizer_state' : self.optimizer.state_dict(),
             'class_to_idx' : self.class_to_idx
         }
-        filename = save_dir+'/'+self.arch+'.checkpoint'
+        
         torch.save(checkpoint, filename)
         print(f'Saved checkpoint to {filename}')
         
     def load(self, save_dir='checkpoints', checkpoint=None):
         
+        # objects save_dir will override parameter..
+        if hasattr(self, 'save_dir'):
+            save_dir = self.save_dir
+            
         filename = checkpoint if checkpoint != None else save_dir+'/'+self.arch+'.checkpoint'
         if not os.path.exists(filename):
-            print("Could'nt find any {filename}.","Will be created after first training epoch.")
+            print(f"Could'nt find any {filename}.","Will be created after first training epoch.")
+            if not os.path.exists(save_dir):
+                  os.makedirs(save_dir)
             return
+        
         
         print(f'Loading {filename}')
         c = torch.load(filename)
         try:
             self.model.load_state_dict(c['model_state'])
-            self.optimizer.load_state_dict(c['optimizer_state']
+            #self.optimizer.load_state_dict(c['optimizer_state']
         except:
             self.model_state = c['model_state']
         #self.model._modules[self.classifier_key].load_state_dict(c['classifier_state'])
